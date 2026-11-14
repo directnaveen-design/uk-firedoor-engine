@@ -1,5 +1,6 @@
 import os
 import urllib.parse
+from xml.sax.saxutils import escape
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from reportlab.lib.pagesizes import A4, landscape
@@ -13,11 +14,20 @@ GBP_FMT = "\u00a3#,##0.00"
 
 def build_tally_link(building: str, door_id: str, defect: str) -> str:
     params = urllib.parse.urlencode({
-        "building": building[:60],
-        "door": door_id[:40],
-        "defect": defect[:80]
+        "building": str(building)[:60],
+        "door": str(door_id)[:40],
+        "defect": str(defect)[:80]
     })
     return f"{TALLY_BASE_URL}?{params}"
+
+
+def safe_excel_text(val, default: str = "") -> str:
+    s = str(val if val is not None else default).strip()
+    if not s:
+        s = default
+    if s.startswith("="):
+        return " " + s
+    return s
 
 
 def generate_excel_pack(building_info: dict, doors: list, output_path: str):
@@ -40,13 +50,18 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
     thin_side = Side(border_style="thin", color="CBD5E0")
     border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
+    client_company = safe_excel_text(building_info.get("client_company"), "UK Fire Contractor")
+    building_name = safe_excel_text(building_info.get("building_name"), "Commercial Site")
+    standard_version = safe_excel_text(building_info.get("standard_version"), "BS 8214:2016")
+    survey_date = safe_excel_text(building_info.get("survey_date"), "")
+
     # TAB 1: Executive_Dashboard
     ws_dash = wb.active
     ws_dash.title = "Executive_Dashboard"
     ws_dash["B2"] = "UK FIRE DOOR COMPLIANCE & REMEDIATION DASHBOARD"
     ws_dash["B2"].font = title_font
-    ws_dash["B3"] = f"Client: {building_info['client_company']} | Site: {building_info['building_name']}"
-    ws_dash["B4"] = f"Standard: {building_info['standard_version']} | Audit Date: {building_info['survey_date']}"
+    ws_dash["B3"] = f"Client: {client_company} | Site: {building_name}"
+    ws_dash["B4"] = f"Standard: {standard_version} | Report Date: {survey_date}"
 
     ws_dash["B8"] = "AUDIT KPI METRIC"
     ws_dash["C8"] = "VALUE"
@@ -56,7 +71,7 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ws_dash[col].alignment = Alignment(horizontal="center")
 
     kpis = [
-        ("Total Doors Surveyed", building_info["total_doors_surveyed"]),
+        ("Total Doors Surveyed", building_info.get("total_doors_surveyed", 0)),
         ("Passed (Compliant)", "=C9-C11"),
         ("Failed / Action Required", "=COUNTA(Carpenter_Schedule!A5:A500)"),
         ("High Priority (P1 - Urgent)", '=COUNTIF(Carpenter_Schedule!K5:K500, "High (P1)")'),
@@ -78,7 +93,7 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
 
     # TAB 2: Carpenter_Schedule
     ws_carp = wb.create_sheet("Carpenter_Schedule")
-    ws_carp["A2"] = f"BS 8214 CARPENTER SCHEDULE OF WORKS - {building_info['building_name']}"
+    ws_carp["A2"] = f"BS 8214 CARPENTER SCHEDULE OF WORKS - {building_name}"
     ws_carp["A2"].font = title_font
 
     headers = [
@@ -97,21 +112,44 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
     unique_parts = {}
     for r_offset, d in enumerate(doors):
         r = 5 + r_offset
-        part_name = d.get("part_needed", "No Parts Required")
-        unit_cost = float(d.get("unit_cost_gbp", 0.0))
+        door_id = safe_excel_text(d.get("door_id"), "Unknown")
+        floor = safe_excel_text(d.get("floor"), "Unknown")
+        rating = safe_excel_text(d.get("rating"), "Unknown")
+        defect = safe_excel_text(d.get("defect"), "Unspecified defect")
+        remedial_action = safe_excel_text(d.get("remedial_action"), "MANUAL REVIEW REQUIRED")
+        part_name = safe_excel_text(d.get("part_needed"), "No Parts Required")
+        priority = safe_excel_text(d.get("priority"), "Medium (P2)")
+
+        try:
+            qty = int(float(d.get("qty", 0)))
+        except (ValueError, TypeError):
+            qty = 0
+        try:
+            unit_cost = float(d.get("unit_cost_gbp", 0.0))
+        except (ValueError, TypeError):
+            unit_cost = 0.0
+        try:
+            labour_mins = int(float(d.get("labour_mins", 30)))
+        except (ValueError, TypeError):
+            labour_mins = 30
+
         if part_name not in unique_parts and unit_cost > 0:
             unique_parts[part_name] = unit_cost
 
-        tally_url = build_tally_link(building_info["building_name"], d["door_id"], d["defect"])
+        tally_url = build_tally_link(building_name, door_id, defect)
         row_vals = [
-            d["door_id"], d["floor"], d["rating"], d["defect"],
-            d["remedial_action"], part_name, int(d.get("qty", 0)),
-            unit_cost, f"=G{r}*H{r}", int(d.get("labour_mins", 30)),
-            d["priority"], f'=HYPERLINK("{tally_url}", "Tap to Upload Photo")'
+            door_id, floor, rating, defect,
+            remedial_action, part_name, qty,
+            unit_cost, f"=G{r}*H{r}", labour_mins,
+            priority, "Tap to Upload Photo"
         ]
         for c_idx, val in enumerate(row_vals, start=1):
             cell = ws_carp.cell(r, c_idx, val)
-            cell.font = link_font if c_idx == 12 else reg_font
+            if c_idx == 12:
+                cell.hyperlink = tally_url
+                cell.font = link_font
+            else:
+                cell.font = reg_font
             cell.border = border
             cell.alignment = Alignment(vertical="center", wrap_text=True)
             if c_idx in [8, 9]:
@@ -143,7 +181,7 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
     parts_list = list(unique_parts.items()) or [("Standard Intumescent Seal Pack", 0.0)]
     for idx, (p_name, u_cost) in enumerate(parts_list):
         r = 5 + idx
-        ws_bom.cell(r, 1, p_name).border = border
+        ws_bom.cell(r, 1, safe_excel_text(p_name, "Standard Intumescent Seal Pack")).border = border
         c_qty = ws_bom.cell(r, 2, f'=SUMIF(Carpenter_Schedule!$F$5:$F$500, A{r}, Carpenter_Schedule!$G$5:$G$500)')
         c_qty.border = border
         c_unit = ws_bom.cell(r, 3, u_cost)
@@ -179,8 +217,8 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ws_q[col].border = border
 
     quote_rows = [
-        ("Joiner Hourly Rate (\u00a3/hr)", float(building_info["hourly_rate"]), GBP_FMT, True),
-        ("Material Markup (%)", float(building_info["material_markup"]), "0.0%", True),
+        ("Joiner Hourly Rate (\u00a3/hr)", float(building_info.get("hourly_rate", 55.0)), GBP_FMT, True),
+        ("Material Markup (%)", float(building_info.get("material_markup", 0.15)), "0.0%", True),
         ("UK VAT Rate (%)", 0.20, "0.0%", True),
         ("", "", None, False),
         ("Total Estimated Joinery Hours", "=Executive_Dashboard!C15", "0.00", False),
@@ -222,24 +260,29 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
     cell_style = ParagraphStyle("CellStyle", parent=styles["Normal"], fontSize=8, leading=10)
     head_style = ParagraphStyle("HeadStyle", parent=styles["Normal"], fontSize=8.5, leading=10, textColor=colors.white, fontName="Helvetica-Bold")
 
+    client_esc = escape(str(building_info.get("client_company", "UK Fire Contractor")))
+    building_esc = escape(str(building_info.get("building_name", "Commercial Site")))
+    date_esc = escape(str(building_info.get("survey_date", "")))
+    std_esc = escape(str(building_info.get("standard_version", "BS 8214:2016")))
+
     elements = [
         Paragraph("UK FIRE DOOR REMEDIATION SCHEDULE & PRE-WORK COMPLIANCE REPORT", title_style),
         Paragraph(
-            f"<b>Client:</b> {building_info['client_company']} | <b>Site:</b> {building_info['building_name']} | "
-            f"<b>Date:</b> {building_info['survey_date']} | <b>Standard:</b> {building_info['standard_version']}",
+            f"<b>Client:</b> {client_esc} | <b>Site:</b> {building_esc} | "
+            f"<b>Date:</b> {date_esc} | <b>Standard:</b> {std_esc}",
             sub_style
         )
     ]
 
-    total_d = building_info["total_doors_surveyed"]
+    total_d = int(building_info.get("total_doors_surveyed", 0))
     fail_d = len(doors)
     pass_d = max(0, total_d - fail_d)
-    p1_count = sum(1 for d in doors if "High" in d.get("priority", ""))
+    p1_count = sum(1 for d in doors if "High" in str(d.get("priority", "")))
 
     kpi_table = Table(
         [
             ["Total Surveyed", "Passed (Compliant)", "Action Required", "High Priority (P1)", "Governing Standard"],
-            [str(total_d), str(pass_d), str(fail_d), str(p1_count), f"Fire Safety Regs 2022 & {building_info['standard_version']}"]
+            [str(total_d), str(pass_d), str(fail_d), str(p1_count), f"Fire Safety Regs 2022 & {building_info.get('standard_version', 'BS 8214:2016')}"]
         ],
         colWidths=[120, 120, 120, 130, 300]
     )
@@ -259,15 +302,24 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
     headers = ["Door ID", "Floor", "Rating", "Recorded Defect (with Page Ref)", "Required BS 8214 Remedial Works", "Certified Part", "Priority", "Site Evidence Status"]
     table_data = [[Paragraph(h, head_style) for h in headers]]
     for d in doors:
-        page_tag = f" (p.{d['source_page']})" if d.get("source_page") else ""
+        door_id_esc = escape(str(d.get("door_id", "Unknown")))
+        floor_esc = escape(str(d.get("floor", "Unknown")))
+        rating_esc = escape(str(d.get("rating", "Unknown")))
+        defect_esc = escape(str(d.get("defect", "Unspecified defect")))
+        remedial_esc = escape(str(d.get("remedial_action", "MANUAL REVIEW REQUIRED")))
+        part_esc = escape(str(d.get("part_needed", "No Parts Required")))
+        priority_esc = escape(str(d.get("priority", "Medium (P2)")))
+        qty_val = d.get("qty", 0)
+        page_tag = escape(f" (p.{d.get('source_page')})") if d.get("source_page") else ""
+
         table_data.append([
-            Paragraph(str(d["door_id"]), cell_style),
-            Paragraph(str(d["floor"]), cell_style),
-            Paragraph(str(d["rating"]), cell_style),
-            Paragraph(f"{d['defect']}{page_tag}", cell_style),
-            Paragraph(str(d["remedial_action"]), cell_style),
-            Paragraph(f"{d.get('qty', 0)}x {d.get('part_needed', 'N/A')}", cell_style),
-            Paragraph(str(d["priority"]), cell_style),
+            Paragraph(door_id_esc, cell_style),
+            Paragraph(floor_esc, cell_style),
+            Paragraph(rating_esc, cell_style),
+            Paragraph(f"{defect_esc}{page_tag}", cell_style),
+            Paragraph(remedial_esc, cell_style),
+            Paragraph(f"{escape(str(qty_val))}x {part_esc}", cell_style),
+            Paragraph(priority_esc, cell_style),
             Paragraph("Awaiting Carpenter<br/>Tally Photo Upload", cell_style),
         ])
 
@@ -284,10 +336,10 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
         main_table,
         Spacer(1, 12),
         Paragraph(
-            f"<b>Compliance Scope Notice:</b> Stage 1 Pre-Work Remediation Schedule generated under {building_info['standard_version']}. "
+            f"<b>Compliance Scope Notice:</b> Stage 1 Pre-Work Remediation Schedule generated under {std_esc}. "
             "Final Golden Thread Closure Sign-Off is issued upon receipt of photographic installation evidence via the assigned Tally.so portal.",
             sub_style
         )
     ])
     doc.build(elements)
-  
+                     
