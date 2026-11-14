@@ -1,7 +1,91 @@
-fastapi==0.115.6
-uvicorn==0.34.0
-httpx==0.28.1
-pypdf==5.1.0
-openpyxl==3.1.5
-reportlab==4.2.5
-pydantic==2.10.4
+# UK Fire Door Remediation Parts Catalog
+# NOTE: Every unit_price_gbp below is a GUIDE PRICE.
+# Confirm and update exact trade prices from your UK supplier (e.g., IronmongeryDirect, Safelincs, Doorstuff).
+
+PARTS_CATALOG = {
+    "DAMPER_600X300_60": {
+        "code": "DAMPER_600X300_60",
+        "description": "600x300mm 60-min Intumescent Fire Damper Grille (Steel Louvres) [GUIDE PRICE]",
+        "unit": "Unit",
+        "unit_price_gbp": 145.00,
+    },
+    "DOORSET_FD60S_DBL": {
+        "code": "DOORSET_FD60S_DBL",
+        "description": "Bespoke FD60S Double Doorset Replacement (1050+1050x2100mm) [GUIDE PRICE]",
+        "unit": "Set",
+        "unit_price_gbp": 1150.00,
+    },
+    "DOORSET_FD30S_SGL": {
+        "code": "DOORSET_FD30S_SGL",
+        "description": "FD30S Single Fire Doorset Replacement [GUIDE PRICE]",
+        "unit": "Set",
+        "unit_price_gbp": 580.00,
+    },
+    "INTUM_STRIP_15X4": {
+        "code": "INTUM_STRIP_15X4",
+        "description": "15x4mm Plain Brown Intumescent Strip (Per Metre) [GUIDE PRICE]",
+        "unit": "Metre",
+        "unit_price_gbp": 3.50,
+    },
+    "INTUM_STRIP_20X4": {
+        "code": "INTUM_STRIP_20X4",
+        "description": "20x4mm FD60 Intumescent & Cold Smoke Brush Strip (Per Metre) [GUIDE PRICE]",
+        "unit": "Metre",
+        "unit_price_gbp": 4.80,
+    },
+    "HINGE_PAD_1MM": {
+        "code": "HINGE_PAD_1MM",
+        "description": "1mm Intumescent Hinge Pad [GUIDE PRICE]",
+        "unit": "Pad",
+        "unit_price_gbp": 1.25,
+    },
+    "DROP_SEAL_838": {
+        "code": "DROP_SEAL_838",
+        "description": "838mm Surface-Mounted Drop-Down Acoustic/Smoke Threshold Seal [GUIDE PRICE]",
+        "unit": "Unit",
+        "unit_price_gbp": 42.00,
+    },
+    "ASTRAGAL_SET_2100": {
+        "code": "ASTRAGAL_SET_2100",
+        "description": "2.1m Centre Meeting-Stile Smoke Astragal Seal Set [GUIDE PRICE]",
+        "unit": "Set",
+        "unit_price_gbp": 38.00,
+    },
+    "SIGN_FD60_RIGID": {
+        "code": "SIGN_FD60_RIGID",
+        "description": "Rigid Photoluminescent FD60 Fire Door Keep Shut Sign [GUIDE PRICE]",
+        "unit": "Unit",
+        "unit_price_gbp": 3.20,
+    },
+    "SIGN_FD30_RIGID": {
+        "code": "SIGN_FD30_RIGID",
+        "description": "Rigid Photoluminescent FD30 Fire Door Keep Shut Sign [GUIDE PRICE]",
+        "unit": "Unit",
+        "unit_price_gbp": 3.20,
+    },
+    "CLOSER_OH_EN3": {
+        "code": "CLOSER_OH_EN3",
+        "description": "Overhead Fire Door Closer EN3-4 (CE/UKCA Marked) [GUIDE PRICE]",
+        "unit": "Unit",
+        "unit_price_gbp": 68.00,
+    },
+    "LOCK_INTUM_JACKET": {
+        "code": "LOCK_INTUM_JACKET",
+        "description": "Intumescent Lock / Latch Kit Jacket [GUIDE PRICE]",
+        "unit": "Unit",
+        "unit_price_gbp": 6.50,
+    },
+    "NO_PARTS_REQ": {
+        "code": "NO_PARTS_REQ",
+        "description": "No Parts Required",
+        "unit": "None",
+        "unit_price_gbp": 0.00,
+    },
+}
+
+
+def catalog_prompt_summary() -> str:
+    lines = []
+    for code, item in PARTS_CATALOG.items():
+        lines.append(f"- {code}: {item['description']} (Unit: {item['unit']})")
+    return "\n".join(lines)
