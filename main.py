@@ -164,7 +164,7 @@ async def extract_chunk_with_gemini(
     catalog_text = catalog_prompt_summary()
     job_level_rule = (
         "Also extract job-level metadata from the header/cover: "
-        '"end_client_name", "contractor_company", "site_name" (strip leading dashes/spaces), '
+        '"end_client_name" (the Client organization named in the PDF header), "contractor_company", "site_name" (strip leading dashes/spaces), '
         '"site_address", "survey_date", "total_doors_declared" (integer or null).'
         if is_first_chunk else
         'Set job-level metadata fields to null.'
@@ -172,22 +172,21 @@ async def extract_chunk_with_gemini(
 
     prompt = (
         f"You are a UK Fire Door Inspection data extractor. These PDF pages start at original page {start_page}. "
-        "Extract ALL doors visible in these pages (pass, fail, and no_access). Never invent data.\n"
+        "Extract ALL doors visible in these pages. Never invent data and NEVER alter noun types (e.g. never change 'signs' into 'locks').\n"
         "RULES:\n"
-        "1. door_id: keep exact printed ID (including grouped ranges like 'FD-01-04 to 06' or 'FD-02-08 & #09').\n"
-        "2. rating: keep exact printed rating including trailing S (e.g. FD30, FD30S, FD60, FD60S, FD90, FD120).\n"
-        "3. status: strictly one of 'pass', 'fail', or 'no_access'.\n"
-        "4. priority_text: survey's own priority words (e.g. 'Critical Fail', 'High Priority'), else null.\n"
-        "5. est_time_minutes: integer minutes if stated (e.g. '1 hr 30 mins' = 90, '4 hrs 15 mins' = 255, '2.25 hrs' = 135, '2.5 hrs' = 150), else null.\n"
-        "6. client_supplied: true if hardware/parts are client-supplied or on-site, else false.\n"
-        "7. part_code & qty: choose the best matching part_code from the catalogue below based on required_works, and integer qty per row. "
-        "If client_supplied is true, use 'NO_PARTS_REQ' and qty 0.\n"
+        "1. door_id: keep exact printed ID (including grouped IDs like 'FD-01-04 to 06', 'FD-12-005A, 005B & 006', 'FD-22-010/A & B').\n"
+        "2. rating: keep exact printed fire rating including trailing S (e.g. FD30, FD30S, FD60, FD60S, FD90, FD90S, FD120, FD120S). Never drop 'S'.\n"
+        "3. status: strictly one of 'pass', 'fail', 'no_access', or 'excluded' (use 'excluded' for ON HOLD, ASBESTOS, AIB, or M&E / Fire Alarm ONLY doors).\n"
+        "4. priority_text: survey's own priority words (e.g. 'CRITICAL FAIL', 'REPLACEMENT', 'HIGH FAIL', 'MEDIUM FAIL'), else null.\n"
+        "5. est_time_minutes: integer minutes for the row as printed (e.g. '1.5 hrs' = 90, '4.25 hrs' = 255, '4.50 hrs' = 270, '2.25 hrs' = 135, '2.00 hrs' = 120, '1.75 hrs' = 105), else null.\n"
+        "6. client_supplied: true ONLY if the *entire* row has zero contractor-supplied parts. If a door has a client-supplied lock PLUS a contractor-supplied threshold seal, set client_supplied=false and map the threshold seal part_code.\n"
+        "7. part_code & qty: choose the best matching part_code from the catalogue below based on required_works, and integer qty per row.\n"
         f"CATALOGUE:\n{catalog_text}\n\n"
         f"{job_level_rule}\n"
         "Return strict JSON:\n"
         '{"end_client_name": "...", "contractor_company": "...", "site_name": "...", "site_address": "...", '
         '"survey_date": "...", "total_doors_declared": <int or null>, '
-        '"doors": [{"door_id": "...", "floor": "...", "rating": "...", "status": "pass|fail|no_access", '
+        '"doors": [{"door_id": "...", "floor": "...", "rating": "...", "status": "pass|fail|no_access|excluded", '
         '"findings": "...", "required_works": "...", "priority_text": "... or null", '
         '"est_time_minutes": <int or null>, "client_supplied": false, "part_code": "...", "qty": <int>, "page": <int>}]}'
     )
@@ -228,26 +227,31 @@ def split_grouped_door_id(raw_id: str) -> list[str]:
         return ["Unknown"]
 
     # Pattern 1: "FD-01-04 to 06" or "FD-01-04 to FD-01-06"
-    m_range = re.match(r"^(.*?)(\d+)\s*(?:to|-)\s*(?:[A-Za-z\-]*?)(\d+)$", clean, flags=re.IGNORECASE)
-    if m_range and re.search(r"\bto\b", clean, flags=re.IGNORECASE):
+    m_range = re.match(r"^(.*?)(\d+)\s*(?:to)\s*(?:[A-Za-z\-]*?)(\d+)$", clean, flags=re.IGNORECASE)
+    if m_range:
         prefix, start_s, end_s = m_range.group(1), m_range.group(2), m_range.group(3)
         start_n, end_n = int(start_s), int(end_s)
         width = len(start_s)
         if 0 < (end_n - start_n) <= 30:
             return [f"{prefix}{str(i).zfill(width)}" for i in range(start_n, end_n + 1)]
 
-    # Pattern 2: "FD-02-08 & #09" or "FD-02-08 & FD-02-09"
+    # Pattern 2: "FD-22-010/A & B" or "FD-22-010/A-B"
+    m_slash_pair = re.match(r"^(.*?/)([A-Za-z])\s*(?:&|-|and)\s*([A-Za-z])$", clean, flags=re.IGNORECASE)
+    if m_slash_pair:
+        base_p, c1, c2 = m_slash_pair.group(1), m_slash_pair.group(2).upper(), m_slash_pair.group(3).upper()
+        return [f"{base_p}{c1}", f"{base_p}{c2}"]
+
+    # Pattern 3: Comma or ampersand separated e.g. "FD-12-005A, 005B & 006" or "FD-02-08 & #09"
     if "&" in clean or "," in clean:
         parts = [p.strip().lstrip("#").strip() for p in re.split(r"[&,]", clean) if p.strip()]
         if len(parts) > 1:
             first = parts[0]
-            m_prefix = re.match(r"^(.*?)(\d+)$", first)
+            m_prefix = re.match(r"^([A-Za-z]+-\d+-)(\d+[A-Za-z]?)$", first) or re.match(r"^(.*?)(\d+[A-Za-z]?)$", first)
             expanded = [first]
             for p in parts[1:]:
-                if p.isdigit() and m_prefix:
+                if m_prefix and not p.upper().startswith("FD"):
                     prefix = m_prefix.group(1)
-                    width = len(m_prefix.group(2))
-                    expanded.append(f"{prefix}{p.zfill(width)}")
+                    expanded.append(f"{prefix}{p}")
                 else:
                     expanded.append(p)
             return expanded
@@ -255,23 +259,31 @@ def split_grouped_door_id(raw_id: str) -> list[str]:
     return [clean.replace("#", "").strip()]
 
 
-def map_priority_deterministic(priority_text) -> tuple[str, str]:
-    if priority_text is None or not str(priority_text).strip():
-        return "Medium (P2)", "priority not stated"
-    s = str(priority_text).strip().lower()
-    if any(k in s for k in ("critical", "high", "urgent", "p1")):
+def map_priority_deterministic(priority_text, findings: str = "", req_works: str = "") -> tuple[str, str]:
+    combined = f"{priority_text or ''} {findings} {req_works}".strip().lower()
+    if any(k in combined for k in ("critical", "high", "urgent", "p1", "replacement", "doorset replacement")):
         return "High (P1)", ""
-    if any(k in s for k in ("medium", "standard", "p2")):
+    if any(k in combined for k in ("medium", "standard", "p2")):
         return "Medium (P2)", ""
-    if any(k in s for k in ("low", "advisory", "p3")):
+    if any(k in combined for k in ("low", "advisory", "p3")):
         return "Low (P3)", ""
     return "Medium (P2)", "priority not stated"
 
 
-def process_extracted_doors(raw_doors: list) -> tuple[list, list, list]:
+def is_excluded_door(status: str, findings: str, req_works: str) -> bool:
+    combined = f"{status} {findings} {req_works}".lower()
+    if status == "excluded":
+        return True
+    if any(k in combined for k in ("on hold", "asbestos", "aib", "m&e only", "referred to m&e", "excluded from active")):
+        return True
+    return False
+
+
+def process_extracted_doors(raw_doors: list) -> tuple[list, list, list, list]:
     seen_keys = set()
     passed_doors = []
     no_access_doors = []
+    excluded_doors = []
     failed_doors = []
 
     for d in raw_doors:
@@ -289,30 +301,25 @@ def process_extracted_doors(raw_doors: list) -> tuple[list, list, list]:
         else:
             mins_per_door = [None] * count
 
-        raw_qty = safe_int(d.get("qty"), 0) or 0
+        raw_qty = safe_int(d.get("qty"), 1) or 1
         if count > 1 and raw_qty >= count:
             base_q = raw_qty // count
             rem_q = raw_qty % count
             qty_per_door = [base_q + (1 if idx < rem_q else 0) for idx in range(count)]
         else:
-            qty_per_door = [raw_qty] * count
+            qty_per_door = [raw_qty] + [0] * (count - 1) if raw_qty == 1 else [raw_qty] * count
 
         status = str(d.get("status") or "fail").strip().lower()
-        if "pass" in status:
-            status = "pass"
-        elif "no" in status and "access" in status:
-            status = "no_access"
-        else:
-            status = "fail"
-
         floor = str(d.get("floor") or "Unknown").strip() or "Unknown"
         rating = str(d.get("rating") or "Unknown").strip() or "Unknown"
         findings = str(d.get("findings") or "").strip() or "Unspecified finding"
         req_works = str(d.get("required_works") or "").strip() or findings
-        prio, prio_note = map_priority_deterministic(d.get("priority_text"))
+        prio, prio_note = map_priority_deterministic(d.get("priority_text"), findings, req_works)
         client_supplied = bool(d.get("client_supplied", False))
         part_code = str(d.get("part_code") or "").strip().upper()
         page_num = safe_int(d.get("page"), 1) or 1
+
+        excluded_flag = is_excluded_door(status, findings, req_works)
 
         for idx, single_id in enumerate(split_ids):
             dedupe_key = f"{norm_key(single_id)}|{norm_key(floor)}|{norm_key(findings)}"
@@ -320,14 +327,23 @@ def process_extracted_doors(raw_doors: list) -> tuple[list, list, list]:
                 continue
             seen_keys.add(dedupe_key)
 
-            if status == "pass":
+            if "pass" in status and not excluded_flag:
                 passed_doors.append({"door_id": single_id, "floor": floor, "rating": rating, "page": page_num})
                 continue
-            if status == "no_access":
+            if ("no" in status and "access" in status) or "quarantine" in findings.lower():
                 no_access_doors.append({"door_id": single_id, "floor": floor, "rating": rating, "findings": findings, "page": page_num})
                 continue
+            if excluded_flag:
+                excluded_doors.append({
+                    "door_id": single_id,
+                    "floor": floor,
+                    "rating": rating,
+                    "reason": f"{findings} — {req_works}".strip(" —"),
+                    "page": page_num
+                })
+                continue
 
-            if client_supplied:
+            if client_supplied or part_code == "NO_PARTS_REQ":
                 part_desc = "Client-Supplied (Labour Only)"
                 qty_val = 0
                 unit_cost = 0.0
@@ -364,7 +380,7 @@ def process_extracted_doors(raw_doors: list) -> tuple[list, list, list]:
                 "source_page": page_num,
             })
 
-    return failed_doors, passed_doors, no_access_doors
+    return failed_doors, passed_doors, no_access_doors, excluded_doors
 
 
 async def execute_pipeline(job: ProcessJobRequest):
@@ -401,13 +417,12 @@ async def execute_pipeline(job: ProcessJobRequest):
             for r in chunk_results:
                 all_raw_doors.extend(r.get("doors") or [])
 
-            failed_doors, passed_doors, no_access_doors = process_extracted_doors(all_raw_doors)
-            total_surveyed = len(failed_doors) + len(passed_doors) + len(no_access_doors)
+            failed_doors, passed_doors, no_access_doors, excluded_doors = process_extracted_doors(all_raw_doors)
+            total_surveyed = len(failed_doors) + len(passed_doors) + len(no_access_doors) + len(excluded_doors)
 
             if total_surveyed == 0:
                 raise ValueError("ZeroDoorsError: No fire door inspection records were found in the uploaded PDF.")
 
-            # Quality Gate checks
             reasons = []
             if failed_doors:
                 missing_time_count = sum(1 for d in failed_doors if not d["has_est_time"])
@@ -429,39 +444,4 @@ async def execute_pipeline(job: ProcessJobRequest):
                 "total_doors_surveyed": total_surveyed,
                 "passed_count": len(passed_doors),
                 "no_access_count": len(no_access_doors),
-                "no_access_ids": [d["door_id"] for d in no_access_doors],
-                "hourly_rate": commercial["hourly_rate"],
-                "material_markup": commercial["material_markup"],
-                "site_fee": commercial["setup_fee_gbp"],
-                "vat_rate": commercial["vat_rate"],
-            }
-
-            xlsx_local = f"/tmp/{job.job_id}.xlsx"
-            pdf_local = f"/tmp/{job.job_id}.pdf"
-            generate_excel_pack(b_info, failed_doors, xlsx_local)
-            generate_prework_pdf(b_info, failed_doors, pdf_local)
-
-            xlsx_remote = f"{job.job_id}/UK_FireDoor_Compliance_Pack.xlsx"
-            pdf_remote = f"{job.job_id}/UK_FireDoor_PreWork_Report.pdf"
-
-            with open(xlsx_local, "rb") as f:
-                up_x = await client.post(
-                    f"{SUPABASE_URL}/storage/v1/object/deliverables/{xlsx_remote}",
-                    headers=sb_headers("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-                    content=f.read()
-                )
-                up_x.raise_for_status()
-
-            with open(pdf_local, "rb") as f:
-                up_p = await client.post(
-                    f"{SUPABASE_URL}/storage/v1/object/deliverables/{pdf_remote}",
-                    headers=sb_headers("application/pdf"),
-                    content=f.read()
-                )
-                up_p.raise_for_status()
-
-            await update_job_status(client, job.job_id, {
-                "status": "completed",
-                "xlsx_url": xlsx_remote,
-                "pdf_url": pdf_remote,
-                "ex
+                "no_access_ids": [d["door_id"] for d in no
