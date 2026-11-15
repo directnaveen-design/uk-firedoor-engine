@@ -444,4 +444,97 @@ async def execute_pipeline(job: ProcessJobRequest):
                 "total_doors_surveyed": total_surveyed,
                 "passed_count": len(passed_doors),
                 "no_access_count": len(no_access_doors),
-                "no_access_ids": [d["door_id"] for d in no
+                                "no_access_ids": [d["door_id"] for d in no_access_doors],
+                "excluded_doors": excluded_doors,
+                "hourly_rate": commercial["hourly_rate"],
+                "material_markup": commercial["material_markup"],
+                "setup_fee_gbp": commercial["setup_fee_gbp"],
+                "vat_rate": commercial["vat_rate"],
+            }
+
+            xlsx_local = f"/tmp/{job.job_id}.xlsx"
+            pdf_local = f"/tmp/{job.job_id}.pdf"
+            generate_excel_pack(b_info, failed_doors, xlsx_local)
+            generate_prework_pdf(b_info, failed_doors, pdf_local)
+
+            xlsx_remote = f"{job.job_id}/UK_FireDoor_Compliance_Pack.xlsx"
+            pdf_remote = f"{job.job_id}/UK_FireDoor_PreWork_Report.pdf"
+
+            with open(xlsx_local, "rb") as f:
+                up_x = await client.post(
+                    f"{SUPABASE_URL}/storage/v1/object/deliverables/{xlsx_remote}",
+                    headers=sb_headers("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                    content=f.read()
+                )
+                up_x.raise_for_status()
+
+            with open(pdf_local, "rb") as f:
+                up_p = await client.post(
+                    f"{SUPABASE_URL}/storage/v1/object/deliverables/{pdf_remote}",
+                    headers=sb_headers("application/pdf"),
+                    content=f.read()
+                )
+                up_p.raise_for_status()
+
+            await update_job_status(client, job.job_id, {
+                "status": "completed",
+                "xlsx_url": xlsx_remote,
+                "pdf_url": pdf_remote,
+                "extracted_doors_json": failed_doors
+            })
+
+            await client.post(
+                N8N_CALLBACK_URL,
+                json={
+                    "job_id": job.job_id,
+                    "status": "completed",
+                    "gmail_thread_id": job.gmail_thread_id,
+                    "sender_email": job.sender_email,
+                    "client_name": end_client_name,
+                    "building_name": site_name,
+                    "total_surveyed": total_surveyed,
+                    "failed_count": len(failed_doors),
+                    "passed_count": len(passed_doors),
+                    "no_access_count": len(no_access_doors),
+                    "excluded_count": len(excluded_doors),
+                    "needs_review": needs_review,
+                    "reasons": reasons,
+                    "xlsx_path": xlsx_remote,
+                    "pdf_path": pdf_remote
+                }
+            )
+
+        except Exception as exc:
+            err_msg = safe_error_summary(exc)
+            await update_job_status(client, job.job_id, {
+                "status": "failed",
+                "error_message": err_msg[:500]
+            })
+            await client.post(
+                N8N_CALLBACK_URL,
+                json={
+                    "job_id": job.job_id,
+                    "status": "failed",
+                    "gmail_thread_id": job.gmail_thread_id,
+                    "sender_email": job.sender_email,
+                    "error": err_msg[:300]
+                }
+            )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/process-job", status_code=202)
+async def start_job(
+    job: ProcessJobRequest,
+    bg: BackgroundTasks,
+    x_webhook_secret: str = Header(None)
+):
+    if not hmac.compare_digest(x_webhook_secret or "", WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid secret")
+    bg.add_task(execute_pipeline, job)
+    return {"status": "accepted", "job_id": job.job_id}
+    
