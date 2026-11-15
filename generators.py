@@ -76,11 +76,15 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ws_dash[col].alignment = Alignment(horizontal="center")
 
     no_access_ids = building_info.get("no_access_ids") or []
+    excluded_doors = building_info.get("excluded_doors") or []
+    excluded_summary = ", ".join(f"{e['door_id']} ({e['reason'][:40]})" for e in excluded_doors) or "None"
+
     kpis = [
         ("Total Doors Surveyed", int(building_info.get("total_doors_surveyed", len(doors)))),
         ("Passed (Compliant)", int(building_info.get("passed_count", 0))),
-        ("Failed / Action Required", f"=COUNTA(Carpenter_Schedule!A5:A{last_row})"),
+        ("Failed / Active Carpentry Scope", f"=COUNTA(Carpenter_Schedule!A5:A{last_row})"),
         ("No Access (Re-Book Required)", int(building_info.get("no_access_count", 0))),
+        ("Excluded / On Hold (Asbestos / M&E)", int(building_info.get("excluded_count", len(excluded_doors)))),
         ("High Priority (P1 - Urgent)", f'=COUNTIF(Carpenter_Schedule!K5:K{last_row}, "High (P1)")'),
         ("Medium Priority (P2 - Standard)", f'=COUNTIF(Carpenter_Schedule!K5:K{last_row}, "Medium (P2)")'),
         ("Low Priority (P3 - Advisory)", f'=COUNTIF(Carpenter_Schedule!K5:K{last_row}, "Low (P3)")'),
@@ -95,17 +99,26 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ws_dash[f"C{idx}"].alignment = Alignment(horizontal="center")
         ws_dash[f"C{idx}"].border = border
 
-    ws_dash["B18"] = "No Access Door IDs (Re-Booking List)"
-    ws_dash["B18"].font = bold_font
-    ws_dash["B18"].fill = light_fill
-    ws_dash["B18"].border = border
-    ws_dash["C18"] = safe_excel_text(", ".join(str(x) for x in no_access_ids), "None")
-    ws_dash["C18"].font = reg_font
-    ws_dash["C18"].border = border
-    ws_dash["C18"].alignment = Alignment(horizontal="center", wrap_text=True)
+    ws_dash["B19"] = "No Access Door IDs (Re-Booking List)"
+    ws_dash["B19"].font = bold_font
+    ws_dash["B19"].fill = light_fill
+    ws_dash["B19"].border = border
+    ws_dash["C19"] = safe_excel_text(", ".join(str(x) for x in no_access_ids), "None")
+    ws_dash["C19"].font = reg_font
+    ws_dash["C19"].border = border
+    ws_dash["C19"].alignment = Alignment(horizontal="center", wrap_text=True)
 
-    ws_dash.column_dimensions["B"].width = 42
-    ws_dash.column_dimensions["C"].width = 28
+    ws_dash["B20"] = "Quarantined / Excluded Doors (Asbestos / M&E)"
+    ws_dash["B20"].font = bold_font
+    ws_dash["B20"].fill = p1_fill
+    ws_dash["B20"].border = border
+    ws_dash["C20"] = safe_excel_text(excluded_summary, "None")
+    ws_dash["C20"].font = reg_font
+    ws_dash["C20"].border = border
+    ws_dash["C20"].alignment = Alignment(horizontal="center", wrap_text=True)
+
+    ws_dash.column_dimensions["B"].width = 44
+    ws_dash.column_dimensions["C"].width = 36
 
     # TAB 2: Carpenter_Schedule
     ws_carp = wb.create_sheet("Carpenter_Schedule")
@@ -237,7 +250,7 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ("Material Markup (%)", float(building_info.get("material_markup", 0.15)), "0.0%", True),
         ("UK VAT Rate (%)", float(building_info.get("vat_rate", 0.20)), "0.0%", True),
         ("", "", None, False),
-        ("Total Estimated Joinery Hours", "=Executive_Dashboard!C16", "0.00", False),
+        ("Total Estimated Joinery Hours", "=Executive_Dashboard!C17", "0.00", False),
         ("Total Joinery Labour Cost (\u00a3)", "=ROUND(C9*C5, 2)", GBP_FMT, False),
         ("Base Material Cost (\u00a3)", f"=Material_Order_BoM!D{tot_r}", GBP_FMT, False),
         ("Material Total with Markup (\u00a3)", "=ROUND(C11*(1+C6), 2)", GBP_FMT, False),
@@ -296,15 +309,16 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
     total_d = int(building_info.get("total_doors_surveyed", 0))
     fail_d = len(doors)
     no_access_d = int(building_info.get("no_access_count", 0))
+    excluded_d = int(building_info.get("excluded_count", 0))
     pass_d = int(building_info.get("passed_count", 0))
     p1_count = sum(1 for d in doors if "High" in str(d.get("priority", "")))
 
     kpi_table = Table(
         [
-            ["Total Surveyed", "Passed", "Action Required", "No Access", "High Priority (P1)", "Governing Standard"],
-            [str(total_d), str(pass_d), str(fail_d), str(no_access_d), str(p1_count), f"Fire Safety Regs 2022 & {building_info.get('standard_version', 'BS 8214:2016')}"]
+            ["Total Surveyed", "Passed", "Active Scope", "No Access", "Excluded (Hold/M&E)", "High Priority (P1)", "Governing Standard"],
+            [str(total_d), str(pass_d), str(fail_d), str(no_access_d), str(excluded_d), str(p1_count), f"Fire Safety Regs 2022 & {building_info.get('standard_version', 'BS 8214:2016')}"]
         ],
-        colWidths=[95, 75, 100, 85, 110, 325]
+        colWidths=[85, 65, 85, 75, 110, 100, 270]
     )
     kpi_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1B365D")),
@@ -343,7 +357,7 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
             Paragraph("Awaiting Carpenter<br/>Tally Photo Upload", cell_style),
         ])
 
-    main_table = Table(table_data, colWidths=[55, 75, 45, 175, 195, 115, 60, 70], repeatRows=1)
+    main_table = Table(table_data, colWidths=[60, 75, 50, 170, 190, 115, 60, 70], repeatRows=1)
     main_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2C5282")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -352,9 +366,18 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
+    elements.append(main_table)
+
+    excluded_list = building_info.get("excluded_doors") or []
+    if excluded_list:
+        excl_text = "; ".join(f"{escape(str(e['door_id']))} ({escape(str(e['rating']))}): {escape(str(e['reason']))}" for e in excluded_list)
+        elements.extend([
+            Spacer(1, 8),
+            Paragraph(f"<b>Quarantined / Out-of-Scope Doors (Excluded from Carpentry Quote):</b> {excl_text}", sub_style)
+        ])
+
     elements.extend([
-        main_table,
-        Spacer(1, 12),
+        Spacer(1, 10),
         Paragraph(
             f"<b>Compliance Scope Notice:</b> Stage 1 Pre-Work Remediation Schedule generated under {std_esc}. "
             "Final Golden Thread Closure Sign-Off requires independent competent-person verification of post-repair photographic evidence.",
