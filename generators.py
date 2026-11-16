@@ -18,17 +18,10 @@ def build_tally_link(building: str, door_id: str, defect: str) -> str:
         "door": str(door_id)[:40],
         "defect": str(defect)[:80]
     })
-    return f"{TALLY_BASE_URL}?{params}"
-
-
-def safe_excel_text(val, default: str = "") -> str:
-    s = str(val if val is not None else default).strip()
-    if not s:
-        s = default
-    if s.startswith("="):
-        return " " + s
-    return s
-
+    return f"{TALLY_BASE_URL}?{params}"def safe_excel_text(val, default: str = "") -> str:
+    s = str(val if val is not None else default).strip().lstrip("=+").strip()
+    return s if s else default
+    
 
 def generate_excel_pack(building_info: dict, doors: list, output_path: str):
     wb = openpyxl.Workbook()
@@ -74,22 +67,23 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ws_dash[col].fill = navy_fill
         ws_dash[col].font = white_bold
         ws_dash[col].alignment = Alignment(horizontal="center")
-
     no_access_ids = building_info.get("no_access_ids") or []
     excluded_doors = building_info.get("excluded_doors") or []
-    excluded_summary = ", ".join(f"{e['door_id']} ({e['reason'][:40]})" for e in excluded_doors) or "None"
+    excluded_summary = "; ".join(f"{e['door_id']} ({e['reason']})" for e in excluded_doors) or "None"
 
     kpis = [
         ("Total Doors Surveyed", int(building_info.get("total_doors_surveyed", len(doors)))),
         ("Passed (Compliant)", int(building_info.get("passed_count", 0))),
         ("Failed / Active Carpentry Scope", f"=COUNTA(Carpenter_Schedule!A5:A{last_row})"),
         ("No Access (Re-Book Required)", int(building_info.get("no_access_count", 0))),
-        ("Excluded / On Hold (Asbestos / M&E)", int(building_info.get("excluded_count", len(excluded_doors)))),
+        ("Excluded / On Hold (Asbestos / M&E / IPC)", int(building_info.get("excluded_count", len(excluded_doors)))),
+        ("Critical Priority (P0 - Immediate)", f'=COUNTIF(Carpenter_Schedule!K5:K{last_row}, "Critical (P0)")'),
         ("High Priority (P1 - Urgent)", f'=COUNTIF(Carpenter_Schedule!K5:K{last_row}, "High (P1)")'),
         ("Medium Priority (P2 - Standard)", f'=COUNTIF(Carpenter_Schedule!K5:K{last_row}, "Medium (P2)")'),
         ("Low Priority (P3 - Advisory)", f'=COUNTIF(Carpenter_Schedule!K5:K{last_row}, "Low (P3)")'),
         ("Total Estimated Joinery Labour (Hours)", f"=ROUND(SUM(Carpenter_Schedule!J5:J{last_row})/60, 2)"),
     ]
+    
     for idx, (label, val) in enumerate(kpis, start=9):
         ws_dash[f"B{idx}"] = label
         ws_dash[f"B{idx}"].font = bold_font
@@ -99,26 +93,26 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ws_dash[f"C{idx}"].alignment = Alignment(horizontal="center")
         ws_dash[f"C{idx}"].border = border
 
-    ws_dash["B19"] = "No Access Door IDs (Re-Booking List)"
-    ws_dash["B19"].font = bold_font
-    ws_dash["B19"].fill = light_fill
-    ws_dash["B19"].border = border
-    ws_dash["C19"] = safe_excel_text(", ".join(str(x) for x in no_access_ids), "None")
-    ws_dash["C19"].font = reg_font
-    ws_dash["C19"].border = border
-    ws_dash["C19"].alignment = Alignment(horizontal="center", wrap_text=True)
-
-    ws_dash["B20"] = "Quarantined / Excluded Doors (Asbestos / M&E)"
+    ws_dash["B20"] = "No Access Door IDs (Re-Booking List)"
     ws_dash["B20"].font = bold_font
-    ws_dash["B20"].fill = p1_fill
+    ws_dash["B20"].fill = light_fill
     ws_dash["B20"].border = border
-    ws_dash["C20"] = safe_excel_text(excluded_summary, "None")
+    ws_dash["C20"] = safe_excel_text(", ".join(str(x) for x in no_access_ids), "None")
     ws_dash["C20"].font = reg_font
     ws_dash["C20"].border = border
     ws_dash["C20"].alignment = Alignment(horizontal="center", wrap_text=True)
 
+    ws_dash["B21"] = "Quarantined / Excluded Doors (Asbestos / M&E)"
+    ws_dash["B21"].font = bold_font
+    ws_dash["B21"].fill = p1_fill
+    ws_dash["B21"].border = border
+    ws_dash["C21"] = safe_excel_text(excluded_summary, "None")
+    ws_dash["C21"].font = reg_font
+    ws_dash["C21"].border = border
+    ws_dash["C21"].alignment = Alignment(horizontal="center", wrap_text=True)
+
     ws_dash.column_dimensions["B"].width = 44
-    ws_dash.column_dimensions["C"].width = 36
+    ws_dash.column_dimensions["C"].width = 65
 
     # TAB 2: Carpenter_Schedule
     ws_carp = wb.create_sheet("Carpenter_Schedule")
@@ -184,7 +178,8 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
             if c_idx in [8, 9]:
                 cell.number_format = GBP_FMT
             if c_idx == 11:
-                if "High" in str(val):
+            if "Critical" in str(val) or "High" in str(val):
+                                    
                     cell.fill = p1_fill
                 elif "Medium" in str(val):
                     cell.fill = p2_fill
@@ -251,7 +246,8 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ("UK VAT Rate (%)", float(building_info.get("vat_rate", 0.20)), "0.0%", True),
         ("", "", None, False),
         ("Total Estimated Joinery Hours", "=Executive_Dashboard!C17", "0.00", False),
-        ("Total Joinery Labour Cost (\u00a3)", "=ROUND(C9*C5, 2)", GBP_FMT, False),
+    ("Total Estimated Joinery Hours", "=Executive_Dashboard!C18", "0.00", False),
+    
         ("Base Material Cost (\u00a3)", f"=Material_Order_BoM!D{tot_r}", GBP_FMT, False),
         ("Material Total with Markup (\u00a3)", "=ROUND(C11*(1+C6), 2)", GBP_FMT, False),
         ("Site Setup / Certification Fee (GBP)", float(building_info.get("site_fee", 0.0)), GBP_FMT, True),
