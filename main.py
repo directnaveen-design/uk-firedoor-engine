@@ -444,11 +444,13 @@ async def execute_pipeline(job: ProcessJobRequest):
                 "total_doors_surveyed": total_surveyed,
                 "passed_count": len(passed_doors),
                 "no_access_count": len(no_access_doors),
+                                "excluded_count": len(excluded_doors),
                                 "no_access_ids": [d["door_id"] for d in no_access_doors],
                 "excluded_doors": excluded_doors,
                 "hourly_rate": commercial["hourly_rate"],
                 "material_markup": commercial["material_markup"],
                 "setup_fee_gbp": commercial["setup_fee_gbp"],
+                                "site_fee": commercial["setup_fee_gbp"],
                 "vat_rate": commercial["vat_rate"],
             }
 
