@@ -257,25 +257,23 @@ def split_grouped_door_id(raw_id: str) -> list[str]:
             return expanded
 
     return [clean.replace("#", "").strip()]
-
-
-def map_priority_deterministic(priority_text, findings: str = "", req_works: str = "") -> tuple[str, str]:
+     def map_priority_deterministic(priority_text, findings: str = "", req_works: str = "") -> tuple[str, str]:
     combined = f"{priority_text or ''} {findings} {req_works}".strip().lower()
-    if any(k in combined for k in ("critical", "high", "urgent", "p1", "replacement", "doorset replacement")):
+    if any(k in combined for k in ("critical", "p0", "immediate", "doorset replacement", "full replacement")):
+        return "Critical (P0)", ""
+    if any(k in combined for k in ("high", "urgent", "p1", "replacement")):
         return "High (P1)", ""
     if any(k in combined for k in ("medium", "standard", "p2")):
         return "Medium (P2)", ""
     if any(k in combined for k in ("low", "advisory", "p3")):
         return "Low (P3)", ""
     return "Medium (P2)", "priority not stated"
-
-
 def is_excluded_door(status: str, findings: str, req_works: str) -> bool:
     combined = f"{status} {findings} {req_works}".lower()
     if status == "excluded":
         return True
-    if any(k in combined for k in ("on hold", "asbestos", "aib", "m&e only", "referred to m&e", "excluded from active")):
-        return True
+        if any(k in combined for k in ("on hold", "asbestos", "aib", "m&e only", "referred to m&e", "excluded from active", "ipc hold", "barrier nursing", "isolation room", "decommissioned")):
+            
     return False
 
 
