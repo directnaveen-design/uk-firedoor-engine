@@ -18,7 +18,8 @@ def build_tally_link(building: str, door_id: str, defect: str) -> str:
         "door": str(door_id)[:40],
         "defect": str(defect)[:80]
     })
-    return f"{TALLY_BASE_URL}?{params}"def safe_excel_text(val, default: str = "") -> str:
+    return f"{TALLY_BASE_URL}?{params}
+    "def safe_excel_text(val, default: str = "") -> str:
     s = str(val if val is not None else default).strip().lstrip("=+").strip()
     return s if s else default
     
@@ -178,7 +179,7 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
             if c_idx in [8, 9]:
                 cell.number_format = GBP_FMT
             if c_idx == 11:
-            if "Critical" in str(val) or "High" in str(val):
+                if "Critical" in str(val) or "High" in str(val):
                                     
                     cell.fill = p1_fill
                 elif "Medium" in str(val):
@@ -245,9 +246,9 @@ def generate_excel_pack(building_info: dict, doors: list, output_path: str):
         ("Material Markup (%)", float(building_info.get("material_markup", 0.15)), "0.0%", True),
         ("UK VAT Rate (%)", float(building_info.get("vat_rate", 0.20)), "0.0%", True),
         ("", "", None, False),
-        ("Total Estimated Joinery Hours", "=Executive_Dashboard!C17", "0.00", False),
-    ("Total Estimated Joinery Hours", "=Executive_Dashboard!C18", "0.00", False),
-    
+        ("Total Estimated Joinery Hours", "=Executive_Dashboard!C18", "0.00", False),
+        ("Total Joinery Labour Cost (\u00a3)", "=ROUND(C9*C5, 2)", GBP_FMT, False),
+        
         ("Base Material Cost (\u00a3)", f"=Material_Order_BoM!D{tot_r}", GBP_FMT, False),
         ("Material Total with Markup (\u00a3)", "=ROUND(C11*(1+C6), 2)", GBP_FMT, False),
         ("Site Setup / Certification Fee (GBP)", float(building_info.get("site_fee", 0.0)), GBP_FMT, True),
@@ -307,12 +308,13 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
     no_access_d = int(building_info.get("no_access_count", 0))
     excluded_d = int(building_info.get("excluded_count", 0))
     pass_d = int(building_info.get("passed_count", 0))
-    p1_count = sum(1 for d in doors if "High" in str(d.get("priority", "")))
+    p1_count = sum(1 for d in doors if "Critical" in str(d.get("priority", "")) or "High" in str(d.get("priority", "")))
+
 
     kpi_table = Table(
         [
-            ["Total Surveyed", "Passed", "Active Scope", "No Access", "Excluded (Hold/M&E)", "High Priority (P1)", "Governing Standard"],
-            [str(total_d), str(pass_d), str(fail_d), str(no_access_d), str(excluded_d), str(p1_count), f"Fire Safety Regs 2022 & {building_info.get('standard_version', 'BS 8214:2016')}"]
+            ["Total Surveyed", "Passed", "Active Scope", "No Access", "Excluded (Hold/M&E)","Critical / High (P0/P1)", "Governing Standard"],
+            [str(total_d), str(pass_d), str(fail_d), str(no_access_d), str(excluded_d), str(p1_count), BSA 2022, Fire Safety Regs 2022 & {building_info.get('standard_version', 'BS 8214:2016')}"]
         ],
         colWidths=[85, 65, 85, 75, 110, 100, 270]
     )
@@ -335,7 +337,7 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
         door_id_esc = escape(str(d.get("door_id", "Unknown")))
         floor_esc = escape(str(d.get("floor", "Unknown")))
         rating_esc = escape(str(d.get("rating", "Unknown")))
-        defect_esc = escape(str(d.get("defect", "Unspecified defect")))
+       defect_esc = escape(str(d.get("defect", "Unspecified defect")).lstrip("=+").strip()) 
         remedial_esc = escape(str(d.get("remedial_action", "MANUAL REVIEW REQUIRED")))
         part_esc = escape(str(d.get("part_needed", "UNMAPPED")))
         priority_esc = escape(str(d.get("priority", "Medium (P2)")))
@@ -350,7 +352,8 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
             Paragraph(remedial_esc, cell_style),
             Paragraph(f"{escape(str(qty_val))}x {part_esc}", cell_style),
             Paragraph(priority_esc, cell_style),
-            Paragraph("Awaiting Carpenter<br/>Tally Photo Upload", cell_style),
+            Paragraph("Pending — Post-Work<br/>Photo Evidence", cell_style),
+        
         ])
 
     main_table = Table(table_data, colWidths=[60, 75, 50, 170, 190, 115, 60, 70], repeatRows=1)
