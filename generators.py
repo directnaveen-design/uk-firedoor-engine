@@ -18,8 +18,8 @@ def build_tally_link(building: str, door_id: str, defect: str) -> str:
         "door": str(door_id)[:40],
         "defect": str(defect)[:80]
     })
-    return f"{TALLY_BASE_URL}?{params}
-    "def safe_excel_text(val, default: str = "") -> str:
+    return f"{TALLY_BASE_URL}?{params}"
+    def safe_excel_text(val, default: str = "") -> str:
     s = str(val if val is not None else default).strip().lstrip("=+").strip()
     return s if s else default
     
@@ -314,7 +314,7 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
     kpi_table = Table(
         [
             ["Total Surveyed", "Passed", "Active Scope", "No Access", "Excluded (Hold/M&E)","Critical / High (P0/P1)", "Governing Standard"],
-            [str(total_d), str(pass_d), str(fail_d), str(no_access_d), str(excluded_d), str(p1_count), BSA 2022, Fire Safety Regs 2022 & {building_info.get('standard_version', 'BS 8214:2016')}"]
+            [str(total_d), str(pass_d), str(fail_d), str(no_access_d), str(excluded_d), str(p1_count),  f"BSA 2022, Fire Safety Regs 2022 & {building_info.get('standard_version', 'BS 8214:2016')}"]
         ],
         colWidths=[85, 65, 85, 75, 110, 100, 270]
     )
@@ -337,7 +337,7 @@ def generate_prework_pdf(building_info: dict, doors: list, output_path: str):
         door_id_esc = escape(str(d.get("door_id", "Unknown")))
         floor_esc = escape(str(d.get("floor", "Unknown")))
         rating_esc = escape(str(d.get("rating", "Unknown")))
-       defect_esc = escape(str(d.get("defect", "Unspecified defect")).lstrip("=+").strip()) 
+        defect_esc = escape(str(d.get("defect", "Unspecified defect")).lstrip("=+").strip()) 
         remedial_esc = escape(str(d.get("remedial_action", "MANUAL REVIEW REQUIRED")))
         part_esc = escape(str(d.get("part_needed", "UNMAPPED")))
         priority_esc = escape(str(d.get("priority", "Medium (P2)")))
