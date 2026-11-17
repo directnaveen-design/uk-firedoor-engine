@@ -272,7 +272,7 @@ def is_excluded_door(status: str, findings: str, req_works: str) -> bool:
     combined = f"{status} {findings} {req_works}".lower()
     if status == "excluded":
         return True
-            if any(k in combined for k in ("on hold", "asbestos", "aib", "m&e only", "referred to m&e", "excluded from active", "ipc hold", "barrier nursing", "isolation room", "decommissioned")):
+    if any(k in combined for k in ("on hold", "asbestos", "aib", "m&e only", "referred to m&e", "excluded from active", "ipc hold", "barrier nursing", "isolation room", "decommissioned")):
         return True
     return False
     
