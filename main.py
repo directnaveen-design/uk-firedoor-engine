@@ -53,7 +53,7 @@ def safe_error_summary(exc: Exception) -> str:
         return f"{type(exc).__name__}: HTTP {exc.response.status_code}"
     if isinstance(exc, ValueError) and str(exc).startswith("ZeroDoorsError:"):
         return str(exc)
-    return type(exc).__name__
+    
 
 
 async def update_job_status(client: httpx.AsyncClient, job_id: str, payload: dict):
@@ -62,7 +62,8 @@ async def update_job_status(client: httpx.AsyncClient, job_id: str, payload: dic
         f"{SUPABASE_URL}/rest/v1/compliance_jobs?job_id=eq.{job_id}",
         headers=sb_headers(),
         json=payload
-    )
+        return f"{type(exc).__name__}: {str(exc)[:200]}"
+    
 
 
 def split_pdf_into_chunks(pdf_bytes: bytes, pages_per_chunk: int = 20) -> tuple[int, list[tuple[int, bytes]]]:
