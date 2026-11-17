@@ -20,8 +20,8 @@ def build_tally_link(building: str, door_id: str, defect: str) -> str:
     })
     return f"{TALLY_BASE_URL}?{params}"
     def safe_excel_text(val, default: str = "") -> str:
-    s = str(val if val is not None else default).strip().lstrip("=+").strip()
-    return s if s else default
+        s = str(val if val is not None else default).strip().lstrip("=+").strip()
+        return s if s else default
     
 
 def generate_excel_pack(building_info: dict, doors: list, output_path: str):
