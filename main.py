@@ -53,7 +53,7 @@ def safe_error_summary(exc: Exception) -> str:
         return f"{type(exc).__name__}: HTTP {exc.response.status_code}"
     if isinstance(exc, ValueError) and str(exc).startswith("ZeroDoorsError:"):
         return str(exc)
-        return f"{type(exc).__name__}: {str(exc)[:200]}"
+    return f"{type(exc).__name__}: {str(exc)[:200]}"
         
     
 
@@ -512,7 +512,8 @@ async def execute_pipeline(job: ProcessJobRequest):
             err_msg = safe_error_summary(exc)
             await update_job_status(client, job.job_id, {
                 "status": "failed",
-                "error_message": err_msg[:500]
+            "error_message": (err_msg or "UnknownError")[:500]
+                
             })
             await client.post(
                 N8N_CALLBACK_URL,
