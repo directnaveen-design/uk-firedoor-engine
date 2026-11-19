@@ -17,8 +17,25 @@ app = FastAPI(title="UK Fire Door Zero-Touch Engine")
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SECRET_KEY = os.environ["SUPABASE_SECRET_KEY"]
-GEMINI_PAID_API_KEY = os.environ["GEMINI_PAID_API_KEY"]
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-4-hydrogen")
+GEMINI_PAID_API_KEY = os.getenv("GEMINI_PAID_API_KEY", "").strip()
+_extra_gemini_csv = [k.strip() for k in os.getenv("GEMINI_BACKUP_API_KEYS", "").split(",") if k.strip()]
+_extra_gemini_numbered = [
+    os.getenv(f"GEMINI_BACKUP_API_KEY_{i}", "").strip()
+    for i in range(1, 11)
+]
+GEMINI_API_KEYS = list(dict.fromkeys(
+    k for k in ([GEMINI_PAID_API_KEY] + _extra_gemini_numbered + _extra_gemini_csv) if k
+))
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+NVIDIA_MODELS = [
+    "mistralai/mistral-large-4-1t-a52b",
+    "nvidia/nemotron-3.5-super-vl-120b-a12b",
+    "moonshotai/kimi-k3.1-pro",
+]
+
 N8N_CALLBACK_URL = os.environ["N8N_CALLBACK_URL"]
 WEBHOOK_SECRET = os.environ["INTERNAL_WEBHOOK_SECRET"]
 
@@ -82,50 +99,124 @@ def split_pdf_into_chunks(pdf_bytes: bytes, pages_per_chunk: int = 20) -> tuple[
         chunks.append((start + 1, buf.getvalue()))
     return total_pages, chunks
 
+def parse_llm_json(raw_text: str) -> dict:
+    cleaned = re.sub(r"<think>.*?</think>", "", raw_text or "", flags=re.DOTALL).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        parsed = json.loads(cleaned[start:end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM output is not a JSON object")
+    return parsed
+
+
+def extract_text_from_chunk(chunk_bytes: bytes, start_page: int) -> str:
+    reader = PdfReader(io.BytesIO(chunk_bytes))
+    pages_txt = []
+    for idx, page in enumerate(reader.pages):
+        txt = (page.extract_text() or "").strip()
+        if txt:
+            pages_txt.append(f"--- PAGE {start_page + idx} ---\n{txt}")
+    return "\n\n".join(pages_txt)
+
+
+async def call_nvidia_json(client: httpx.AsyncClient, prompt_text: str, timeout: float = 180.0) -> dict:
+    if not NVIDIA_API_KEY:
+        raise RuntimeError("NVIDIA_API_KEY is not configured")
+    last_exc = None
+    for model_id in NVIDIA_MODELS:
+        for attempt in range(2):
+            try:
+                resp = await client.post(
+                    NVIDIA_BASE_URL,
+                    headers={
+                        "Authorization": f"Bearer {NVIDIA_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "You are a strict JSON extraction API. Return ONLY a single valid JSON object matching the requested schema. No markdown fences, no commentary.",
+                            },
+                            {"role": "user", "content": prompt_text},
+                        ],
+                        "temperature": 0.0,
+                        "max_tokens": 16384,
+                    },
+                    timeout=timeout,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                choices = data.get("choices") or []
+                if not choices:
+                    raise RuntimeError(f"Empty choices from {model_id}")
+                raw_text = (choices[0].get("message") or {}).get("content") or ""
+                if not raw_text.strip():
+                    raise RuntimeError(f"Empty content from {model_id}")
+                return parse_llm_json(raw_text)
+            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.TransportError, json.JSONDecodeError, KeyError, IndexError, RuntimeError, ValueError) as exc:
+                last_exc = exc
+                if attempt == 0 and (
+                    not isinstance(exc, httpx.HTTPStatusError)
+                    or exc.response.status_code in (429, 500, 502, 503, 504)
+                ):
+                    await asyncio.sleep(4)
+                    continue
+                break
+    raise last_exc or RuntimeError("All NVIDIA models failed")
+
 
 async def call_gemini_json(client: httpx.AsyncClient, parts: list, timeout: float = 180.0) -> dict:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    backoff_waits = [5, 15, 30]
+    if not GEMINI_API_KEYS:
+        raise RuntimeError("No GEMINI API keys configured")
+    models = list(dict.fromkeys([GEMINI_MODEL, "gemini-3.5-flash-lite", "gemini-3.8-flash"]))
     last_exc = None
-
-    for attempt in range(len(backoff_waits) + 1):
-        try:
-            resp = await client.post(
-                url,
-                headers={
-                    "x-goog-api-key": GEMINI_PAID_API_KEY,
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "contents": [{"parts": parts}],
-                    "generationConfig": {
-                        "temperature": 0.0,
-                        "responseMimeType": "application/json"
-                    }
-                },
-                timeout=timeout
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            candidates = data.get("candidates") or []
-            if not candidates:
-                raise RuntimeError("Empty Gemini candidates")
-            finish_reason = candidates[0].get("finishReason")
-            if finish_reason != "STOP":
-                raise RuntimeError(f"Unexpected finishReason: {finish_reason}")
-            raw_text = candidates[0]["content"]["parts"][0]["text"]
-            parsed = json.loads(raw_text)
-            if not isinstance(parsed, dict):
-                raise ValueError("Gemini output is not a JSON object")
-            return parsed
-        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.TransportError, json.JSONDecodeError, KeyError, IndexError, RuntimeError, ValueError) as exc:
-            last_exc = exc
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500 and exc.response.status_code != 429:
-                raise
-            if attempt < len(backoff_waits):
-                await asyncio.sleep(backoff_waits[attempt])
-            else:
-                raise last_exc
+    for api_key in GEMINI_API_KEYS:
+        for model_id in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+            for attempt in range(2):
+                try:
+                    resp = await client.post(
+                        url,
+                        headers={
+                            "x-goog-api-key": api_key,
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "contents": [{"parts": parts}],
+                            "generationConfig": {
+                                "temperature": 0.0,
+                                "responseMimeType": "application/json",
+                            },
+                        },
+                        timeout=timeout,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    candidates = data.get("candidates") or []
+                    if not candidates:
+                        raise RuntimeError("Empty Gemini candidates")
+                    finish_reason = candidates[0].get("finishReason")
+                    if finish_reason != "STOP":
+                        raise RuntimeError(f"Unexpected finishReason: {finish_reason}")
+                    raw_text = candidates[0]["content"]["parts"][0]["text"]
+                    return parse_llm_json(raw_text)
+                except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.TransportError, json.JSONDecodeError, KeyError, IndexError, RuntimeError, ValueError) as exc:
+                    last_exc = exc
+                    if attempt == 0 and (
+                        not isinstance(exc, httpx.HTTPStatusError)
+                        or exc.response.status_code in (429, 500, 502, 503, 504)
+                    ):
+                        await asyncio.sleep(5)
+                        continue
+                    break
+    raise last_exc or RuntimeError("All Gemini fallback keys/models failed")
 
 
 async def extract_commercial_from_email(client: httpx.AsyncClient, job: ProcessJobRequest) -> dict:
@@ -146,7 +237,13 @@ async def extract_commercial_from_email(client: httpx.AsyncClient, job: ProcessJ
         f"EMAIL TEXT:\n{job.email_text[:4000]}"
     )
     try:
-        parsed = await call_gemini_json(client, [{"text": prompt}], timeout=60.0)
+        if NVIDIA_API_KEY:
+            try:
+                parsed = await call_nvidia_json(client, prompt, timeout=60.0)
+            except Exception:
+                parsed = await call_gemini_json(client, [{"text": prompt}], timeout=60.0)
+        else:
+            parsed = await call_gemini_json(client, [{"text": prompt}], timeout=60.0)
         return {
             "hourly_rate": safe_float(parsed.get("hourly_rate"), job.hourly_rate) if parsed.get("hourly_rate") is not None else job.hourly_rate,
             "material_markup": safe_float(parsed.get("material_markup"), job.material_markup) if parsed.get("material_markup") is not None else job.material_markup,
@@ -164,7 +261,6 @@ async def extract_chunk_with_gemini(
     chunk_bytes: bytes,
     is_first_chunk: bool
 ) -> dict:
-    b64_pdf = base64.b64encode(chunk_bytes).decode("utf-8")
     catalog_text = catalog_prompt_summary()
     job_level_rule = (
         "Also extract job-level metadata from the header/cover: "
@@ -194,15 +290,33 @@ async def extract_chunk_with_gemini(
         '"findings": "...", "required_works": "...", "priority_text": "... or null", '
         '"est_time_minutes": <int or null>, "client_supplied": false, "part_code": "...", "qty": <int>, "page": <int>}]}'
     )
+
+    chunk_text = extract_text_from_chunk(chunk_bytes, start_page)
     async with sem:
-        return await call_gemini_json(
-            client,
-            [
-                {"text": prompt},
-                {"inline_data": {"mime_type": "application/pdf", "data": b64_pdf}}
-            ],
-            timeout=180.0
-        )
+        if NVIDIA_API_KEY and len(chunk_text) >= 40:
+            try:
+                return await call_nvidia_json(
+                    client,
+                    f"{prompt}\n\nPDF SURVEY TEXT:\n{chunk_text}",
+                    timeout=180.0,
+                )
+            except Exception:
+                if not GEMINI_API_KEYS:
+                    raise
+
+        if GEMINI_API_KEYS:
+            b64_pdf = base64.b64encode(chunk_bytes).decode("utf-8")
+            return await call_gemini_json(
+                client,
+                [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": "application/pdf", "data": b64_pdf}},
+                ],
+                timeout=180.0,
+            )
+
+        raise ValueError("ScannedPDFError: No selectable text found in PDF and no vision fallback key configured.")
+        
 
 
 def safe_int(val, default: int | None = 0) -> int | None:
