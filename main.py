@@ -28,7 +28,18 @@ GEMINI_API_KEYS = list(dict.fromkeys(
 ))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
 
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+_default_nvidia_models = [
+    "mistralai/mistral-large-4-1t-a52b",
+    "nvidia/nemotron-3.5-super-vl-120b-a12b",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "google/gemma-4-31b-it",
+    "deepseek-ai/deepseek-v4.1-flash",
+    "moonshotai/kimi-k3.1-pro",
+]
+_env_nvidia_models = [m.strip() for m in os.getenv("NVIDIA_MODELS", "").split(",") if m.strip()]
+NVIDIA_MODELS = _env_nvidia_models or _default_nvidia_models
+
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 NVIDIA_MODELS = [
     "mistralai/mistral-large-4-1t-a52b",
