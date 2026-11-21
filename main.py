@@ -38,7 +38,6 @@ _default_nvidia_models = [
     "deepseek-ai/deepseek-v4.1-flash",
     "moonshotai/kimi-k3.1-pro",
 ]
-_env_nvidia_models = [m.strip() for m in os.getenv("NVIDIA_MODELS", "").split(",") if m.strip()]
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
