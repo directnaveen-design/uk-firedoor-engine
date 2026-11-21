@@ -38,6 +38,9 @@ _default_nvidia_models = [
     "moonshotai/kimi-k3.1-pro",
 ]
 _env_nvidia_models = [m.strip() for m in os.getenv("NVIDIA_MODELS", "").split(",") if m.strip()]
+TELEGRAM_BOT_TOKEN = os.getenv("9039501868:AAEaUPoM9LZfGL4JYcunKqef-Q18R8nrfpM", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("6385407421", "").strip()
+
 NVIDIA_MODELS = _env_nvidia_models or _default_nvidia_models
 
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -651,7 +654,19 @@ async def execute_pipeline(job: ProcessJobRequest):
                 }
             )
 
-
+            if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+                try:
+                    await client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": TELEGRAM_CHAT_ID,
+                            "text": f"🚨 Railway Engine Failed\nJob: {job.job_id}\nSite: {job.building_name}\nError: {err_msg[:300]}"
+                        },
+                        timeout=10.0,
+                    )
+                except Exception:
+                    pass
+                    
 @app.get("/health")
 def health():
     return {"status": "ok"}
