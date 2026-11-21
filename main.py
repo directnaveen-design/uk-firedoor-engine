@@ -27,7 +27,8 @@ GEMINI_API_KEYS = list(dict.fromkeys(
     k for k in ([GEMINI_PAID_API_KEY] + _extra_gemini_numbered + _extra_gemini_csv) if k
 ))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
-
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 _default_nvidia_models = [
     "mistralai/mistral-large-4-1t-a52b",
     "nvidia/nemotron-3.5-super-vl-120b-a12b",
@@ -38,13 +39,12 @@ _default_nvidia_models = [
     "moonshotai/kimi-k3.1-pro",
 ]
 _env_nvidia_models = [m.strip() for m in os.getenv("NVIDIA_MODELS", "").split(",") if m.strip()]
-TELEGRAM_BOT_TOKEN = os.getenv("9039501868:AAEaUPoM9LZfGL4JYcunKqef-Q18R8nrfpM", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("6385407421", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 NVIDIA_MODELS = _env_nvidia_models or _default_nvidia_models
 
-NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-NVIDIA_MODELS = [
+
     "mistralai/mistral-large-4-1t-a52b",
     "nvidia/nemotron-3.5-super-vl-120b-a12b",
     "moonshotai/kimi-k3.1-pro",
