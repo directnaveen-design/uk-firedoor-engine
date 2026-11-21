@@ -41,13 +41,7 @@ _default_nvidia_models = [
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-NVIDIA_MODELS = _env_nvidia_models or _default_nvidia_models
-
-
-    "mistralai/mistral-large-4-1t-a52b",
-    "nvidia/nemotron-3.5-super-vl-120b-a12b",
-    "moonshotai/kimi-k3.1-pro",
-]
+NVIDIA_MODELS = [m.strip() for m in os.getenv("NVIDIA_MODELS", "").split(",") if m.strip()] or _default_nvidia_models
 
 N8N_CALLBACK_URL = os.environ["N8N_CALLBACK_URL"]
 WEBHOOK_SECRET = os.environ["INTERNAL_WEBHOOK_SECRET"]
